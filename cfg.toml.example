@@ -1,0 +1,4 @@
+[weather-esp32]
+wifi_ssid = ""
+wifi_psk = ""
+owm_api_key = ""
