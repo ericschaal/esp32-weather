@@ -1,3 +1,4 @@
+use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -11,41 +12,16 @@ use embedded_graphics::{
     prelude::*,
     text::{Baseline, Text, TextStyleBuilder},
 };
-use esp_idf_hal::{delay, gpio, peripheral, spi};
-use esp_idf_hal::gpio::{Input, Output, PinDriver};
+use esp_idf_hal::
+{delay, gpio, peripheral, spi
+};
+use esp_idf_hal::gpio::{PinDriver};
 use esp_idf_hal::prelude::FromValueType;
-use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig, SpiDeviceDriver, SpiDriver};
+use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
+use crate::display::{DisplayManager, DisplayManagerPins};
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
-
-pub type Epd<'a> = Epd7in5<
-    SpiDeviceDriver<'a,
-        SpiDriver<'a>>,
-    PinDriver<'a, gpio::AnyOutputPin, Output>,
-    PinDriver<'a, gpio::AnyInputPin, Input>,
-    PinDriver<'a, gpio::AnyOutputPin, Output>,
-    PinDriver<'a, gpio::AnyOutputPin, Output>, delay::Ets
->;
-
-pub struct DisplayManager<'a> {
-    display: VarDisplay<'a, Color>,
-    driver: SpiDeviceDriver<'a, SpiDriver<'a>>,
-    epd: Epd<'a>
-}
-
-pub struct DisplayManagerPins {
-    pub sclk: gpio::AnyOutputPin,
-    pub sdo: gpio::AnyOutputPin,
-    pub cs: gpio::AnyOutputPin,
-    pub busy: gpio::AnyInputPin,
-    pub dc: gpio::AnyOutputPin,
-    pub rst: gpio::AnyOutputPin,
-}
-
-pub fn new_screen_buffer() -> Vec<u8> {
-    vec![DEFAULT_COLOR.get_byte_value(); SCREEN_BUFFER_SIZE]
-}
 
 impl<'a> DisplayManager<'a> {
     pub fn new(
@@ -70,7 +46,7 @@ impl<'a> DisplayManager<'a> {
             PinDriver::output(pins.dc)?,
             PinDriver::output(pins.rst)?,
             &mut delay::Ets,
-            None,
+            Some(100),
         )?;
 
         let display = VarDisplay::new(
@@ -104,5 +80,10 @@ impl<'a> DisplayManager<'a> {
 
         Ok(())
     }
-
+    #[inline]
+    pub fn new_buffer() -> Vec<u8> {
+        vec![DEFAULT_COLOR.get_byte_value(); SCREEN_BUFFER_SIZE]
+    }
 }
+
+

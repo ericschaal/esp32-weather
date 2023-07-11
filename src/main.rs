@@ -1,8 +1,8 @@
 mod config;
-mod http;
 mod wifi;
 mod owm;
 mod display;
+mod http_client;
 
 use std::thread;
 use std::time::Duration;
@@ -13,11 +13,9 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
-
-use crate::display::{DisplayManager, DisplayManagerPins, new_screen_buffer};
-use crate::wifi::WifiManager;
+use crate::display::{DisplayManager, DisplayManagerPins};
 use crate::owm::api::fetch_owm_report;
-
+use crate::wifi::WifiManager;
 
 
 fn main() -> Result<()> {
@@ -29,25 +27,24 @@ fn main() -> Result<()> {
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let pins = peripherals.pins;
 
-    let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
-    wifi.connect()?;
-
-    let weather = fetch_owm_report(45.5019, 73.5674).unwrap();
-    info!("Weather report: {:?}", weather);
-
-    wifi.disconnect()?;
-
-    let mut buffer = new_screen_buffer();
+    // let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
+    // wifi.connect()?;
+    //
+    // let weather = fetch_owm_report(45.5019, 73.5674).unwrap();
+    // info!("Weather report: {:?}", weather);
+    //
+    // wifi.disconnect()?;
 
     let spi = peripherals.spi2;
-    let sclk = pins.gpio18;
+    let sclk = pins.gpio19;
     let sdo = pins.gpio23;
-    let cs = pins.gpio2;
-    let busy = pins.gpio5;
+    let cs = pins.gpio17;
+    let busy = pins.gpio18;
     let dc = pins.gpio22;
     let rst = pins.gpio21;
 
-    let mut display_manager = DisplayManager::new(
+    let mut buffer = DisplayManager::new_buffer();
+    let mut display = DisplayManager::new(
         spi,
         DisplayManagerPins {
             sclk: sclk.into(),
@@ -60,7 +57,8 @@ fn main() -> Result<()> {
         &mut buffer
     )?;
 
-    display_manager.hello_world()?;
+    //display.hello_world()?;
+
 
     loop {
         thread::sleep(Duration::from_secs(5));

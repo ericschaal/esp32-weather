@@ -1,6 +1,6 @@
-use crate::http::get;
 use crate::config::CONFIG;
 use anyhow::{Result};
+use crate::http_client::get;
 use crate::owm::model::WeatherData;
 
 
