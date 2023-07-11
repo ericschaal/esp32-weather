@@ -2,19 +2,34 @@ mod config;
 mod http;
 mod wifi;
 mod owm;
-mod task;
+mod display;
 
-use std::thread::sleep;
+use std::thread;
 use std::time::Duration;
-
 use anyhow::{Result};
 use esp_idf_sys as _;
 use log::*;
+use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
+
+
+use crate::display::{DisplayManager, DisplayManagerPins, new_screen_buffer};
 use crate::wifi::WifiManager;
 use crate::owm::api::fetch_owm_report;
 
-fn fetch_report_task() -> Result<()> {
-    let mut wifi = WifiManager::new()?;
+
+
+fn main() -> Result<()> {
+    esp_idf_sys::link_patches();
+    esp_idf_svc::log::EspLogger::initialize_default();
+
+    let peripherals = Peripherals::take().unwrap();
+    let sys_loop = EspSystemEventLoop::take().unwrap();
+    let nvs = EspDefaultNvsPartition::take().unwrap();
+    let pins = peripherals.pins;
+
+    let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
     wifi.connect()?;
 
     let weather = fetch_owm_report(45.5019, 73.5674).unwrap();
@@ -22,25 +37,35 @@ fn fetch_report_task() -> Result<()> {
 
     wifi.disconnect()?;
 
-    Ok(())
-}
+    let mut buffer = new_screen_buffer();
 
-fn go_to_deep_sleep() {
-    info!("Going to deep sleep");
-    unsafe {
-        esp_idf_sys::esp_deep_sleep(Duration::from_secs(10).as_micros() as u64)
-    }
-}
+    let spi = peripherals.spi2;
+    let sclk = pins.gpio18;
+    let sdo = pins.gpio23;
+    let cs = pins.gpio2;
+    let busy = pins.gpio5;
+    let dc = pins.gpio22;
+    let rst = pins.gpio21;
 
-fn main() -> Result<()> {
-    esp_idf_sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
+    let mut display_manager = DisplayManager::new(
+        spi,
+        DisplayManagerPins {
+            sclk: sclk.into(),
+            sdo: sdo.into(),
+            cs: cs.into(),
+            busy: busy.into(),
+            dc: dc.into(),
+            rst: rst.into()
+        },
+        &mut buffer
+    )?;
+
+    display_manager.hello_world()?;
 
     loop {
-        fetch_report_task()?;
-        go_to_deep_sleep();
-        sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_secs(5));
     }
 
 }
+
 

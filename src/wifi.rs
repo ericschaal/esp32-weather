@@ -1,7 +1,7 @@
 use anyhow::{Result};
 use crate::config::CONFIG;
 use embedded_svc::wifi::{ClientConfiguration, Configuration};
-use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_hal::modem::Modem;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{EspWifi, BlockingWifi,};
@@ -13,12 +13,8 @@ pub struct WifiManager {
 }
 
 impl WifiManager {
-    pub fn new() -> Result<Self> {
-        let peripherals = Peripherals::take().unwrap();
-        let sysloop = EspSystemEventLoop::take().unwrap();
-        let nvs = EspDefaultNvsPartition::take().unwrap();
-
-        let esp_wifi = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs))?;
+    pub fn new(modem: Modem, sysloop: EspSystemEventLoop, nvs: EspDefaultNvsPartition) -> Result<Self> {
+        let esp_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
         let wifi = BlockingWifi::wrap(esp_wifi, sysloop)?;
 
         Ok(WifiManager {

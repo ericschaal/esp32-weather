@@ -19,7 +19,7 @@ pub fn get(url: impl AsRef<str>) -> Result<String> {
 
     match status {
         200..=299 => {
-            let mut buf = [0_u8; 1024];
+            let mut buf = [0_u8; 256];
             let mut reader = response;
             let mut response_text = String::new();
             loop {

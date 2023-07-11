@@ -45,6 +45,8 @@ uuid = { version = "1.4.0", features = [
 "fast-rng",          # Use a faster (but still sufficiently random) RNG
 "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
 ] }
+embedded-graphics = "0.7.1"
+epd-waveshare = { git = "https://github.com/caemor/epd-waveshare" }
 
 [build-dependencies]
 embuild = "0.31.2"
