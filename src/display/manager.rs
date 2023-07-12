@@ -1,4 +1,3 @@
-use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -8,20 +7,34 @@ use epd_waveshare::{
 };
 
 use embedded_graphics::{
-    mono_font::MonoTextStyleBuilder,
     prelude::*,
-    text::{Baseline, Text, TextStyleBuilder},
+    image::{ImageRaw, Image},
+    pixelcolor::{BinaryColor},
+    primitives:: {Rectangle},
 };
+use embedded_graphics::geometry::AnchorPoint;
+use embedded_graphics::primitives::PrimitiveStyleBuilder;
+use u8g2_fonts::{
+    FontRenderer,
+    fonts,
+    types::{HorizontalAlignment, VerticalPosition, FontColor},
+};
+
 use esp_idf_hal::
 {delay, gpio, peripheral, spi
 };
 use esp_idf_hal::gpio::{PinDriver};
 use esp_idf_hal::prelude::FromValueType;
 use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
-use crate::display::{DisplayManager, DisplayManagerPins};
+
+use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
+use crate::icons::i196x196::WI_DAY_SNOW_THUNDERSTORM_196X196;
+
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
+
+const MARGIN: u32 = 8;
 
 impl<'a> DisplayManager<'a> {
     pub fn new(
@@ -56,30 +69,82 @@ impl<'a> DisplayManager<'a> {
             false
         ).unwrap();
 
+        let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), Size::new(WIDTH - MARGIN, HEIGHT - MARGIN));
+        let current_weather = Rectangle::new(viewport.top_left, Size::new(2 * 196,196));
+        let weather_icon = Rectangle::new(current_weather.top_left, Size::new(196,196));
+        let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), Size::new(196,196));
+
+
+        let rect = DisplayRect {
+            viewport,
+            current_weather,
+            weather_icon,
+            current_temp,
+        };
+
         Ok(Self {
             display,
             driver,
             epd,
+            rect
         })
     }
 
-    pub fn hello_world(&mut self) -> Result<()> {
-        let style = MonoTextStyleBuilder::new()
-            .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
-            .text_color(White)
-            .background_color(Black)
-            .build();
-        let text_style = TextStyleBuilder::new().baseline(Baseline::Top).build();
+    pub fn build_frame(&mut self) -> Result<()> {
+        self.current_weather_icon()?;
+        self.current_temperature_txt()?;
+        self.draw_rect()?;
 
-        let _ = Text::with_text_style("Hello World!", Point::new(90, 10), style, text_style)
-            .draw(&mut self.display);
-
-        // Display updated frame
-        self.epd.update_frame(&mut self.driver, self.display.buffer(), &mut delay::Ets)?;
-        self.epd.display_frame(&mut self.driver, &mut delay::Ets)?;
+        self.update_frame()?;
+        self.display_frame()?;
 
         Ok(())
     }
+
+    pub fn draw_rect(&mut self) -> Result<()> {
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_color(Black)
+            .fill_color(White)
+            .stroke_width(1)
+            .build();
+        self.rect.viewport.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        Ok(())
+    }
+
+    pub fn current_weather_icon(&mut self) -> Result<()> {
+        let raw_image = ImageRaw::<BinaryColor>::new(WI_DAY_SNOW_THUNDERSTORM_196X196 , 196);
+        Image::new(&raw_image, self.rect.current_weather.top_left)
+            .draw(&mut self.display.color_converted())?;
+        Ok(())
+    }
+
+    pub fn current_temperature_txt(&mut self) -> Result<()> {
+        let font = FontRenderer::new::<fonts::u8g2_font_logisoso92_tn>();
+        let text = "32";
+
+        let _ = font.render_aligned(
+            text,
+            self.rect.current_temp.top_left,
+            VerticalPosition::Center,
+            HorizontalAlignment::Center,
+            FontColor::Transparent(Black),
+            &mut self.display.color_converted(),
+        ).unwrap();
+
+        Ok(())
+    }
+
+    fn update_frame(&mut self) -> Result<()> {
+        self.epd.update_frame(&mut self.driver, self.display.buffer(), &mut delay::Ets)?;
+        Ok(())
+    }
+
+    fn display_frame(&mut self) -> Result<()> {
+        self.epd.display_frame(&mut self.driver, &mut delay::Ets)?;
+        Ok(())
+    }
+
     #[inline]
     pub fn new_buffer() -> Vec<u8> {
         vec![DEFAULT_COLOR.get_byte_value(); SCREEN_BUFFER_SIZE]
