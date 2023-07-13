@@ -27,8 +27,8 @@ fn main() -> Result<()> {
 
     let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
     wifi.connect()?;
-    let weather = fetch_owm_report(45.5019, -73.5674).unwrap();
-    wifi.disconnect()?;
+
+    let weather = fetch_owm_report()?;
 
     let spi = peripherals.spi2;
     let sclk = pins.gpio19;
@@ -53,7 +53,6 @@ fn main() -> Result<()> {
     )?;
 
     display.draw_weather_report(weather)?;
-
 
 
     loop {

@@ -35,6 +35,8 @@ pub struct DisplayRect {
     pub current_temp: Rectangle,
     pub feels_like: Rectangle,
     pub current_temp_unit: Rectangle,
+    pub date_location: Rectangle,
+    pub forecast: Rectangle,
 }
 
 pub struct DisplayManagerPins {

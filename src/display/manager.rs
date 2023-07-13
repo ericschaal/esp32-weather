@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -26,6 +27,7 @@ use esp_idf_hal::gpio::{PinDriver};
 use esp_idf_hal::prelude::FromValueType;
 use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
 
+use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
 use crate::icons::WeatherIconSet;
 use crate::owm::icons::get_icon_for_current_weather;
@@ -69,18 +71,22 @@ impl<'a> DisplayManager<'a> {
             false
         ).unwrap();
 
-        let weather_icon_size = Size::new(196, 196);
-        let temp_rect_size = Size::new(196, weather_icon_size.height);
-        let weather_rect_size = Size::new(temp_rect_size.width+ weather_icon_size.width, weather_icon_size.height);
+        let viewport_size = Size::new(WIDTH - MARGIN, HEIGHT - MARGIN);
+        let current_icon_size = Size::new(196, 196);
+        let current_temp_size = Size::new(196, current_icon_size.height);
+        let current_weather_size = Size::new(current_temp_size.width+ current_icon_size.width, current_icon_size.height);
 
-        let temp_unit_size = Size::new(32, temp_rect_size.height);
-        let temp_feels_like_size = Size::new(temp_rect_size.width, 32);
+        let temp_unit_size = Size::new(32, current_temp_size.height);
+        let temp_feels_like_size = Size::new(current_temp_size.width, 32);
 
-        let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), Size::new(WIDTH - MARGIN, HEIGHT - MARGIN));
-        let current_weather = Rectangle::new(viewport.top_left, weather_rect_size);
-        let weather_icon = Rectangle::new(current_weather.top_left, weather_icon_size);
+        let date_location_size = Size::new(viewport_size.width - current_weather_size.width, 64);
+        let forecast_size = Size::new(viewport_size.width - current_weather_size.width, current_weather_size.height - date_location_size.height);
 
-        let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), temp_rect_size);
+        let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), viewport_size);
+        let current_weather = Rectangle::new(viewport.top_left, current_weather_size);
+        let weather_icon = Rectangle::new(current_weather.top_left, current_icon_size);
+
+        let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), current_temp_size);
 
         let current_temp_unit = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), temp_unit_size)
             .translate(Point::new(-(temp_unit_size.width as i32), 0));
@@ -88,13 +94,18 @@ impl<'a> DisplayManager<'a> {
         let feels_like = Rectangle::new(current_temp.anchor_point(AnchorPoint::BottomLeft), temp_feels_like_size)
             .translate(Point::new(0, -(temp_feels_like_size.height as i32)));
 
+        let date_location = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), date_location_size);
+        let forecast = Rectangle::new(date_location.anchor_point(AnchorPoint::BottomLeft), forecast_size);
+
         let rect = DisplayRect {
             viewport,
             current_weather,
             weather_icon,
             current_temp,
             feels_like,
-            current_temp_unit
+            current_temp_unit,
+            date_location,
+            forecast
         };
 
         Ok(Self {
@@ -106,19 +117,23 @@ impl<'a> DisplayManager<'a> {
     }
 
     pub fn draw_weather_report(&mut self, data: WeatherData) -> Result<()> {
-
+        let app_config = CONFIG;
+        let location_name = app_config.location_name;
         let current = data.current.unwrap();
-        let feels_like = current.feels_like;
-        let temp = current.temp;
-        let large_icon_set = WeatherIconSet::new()?;
-        let _ = WeatherIconSet::new_small()?;
-        let icon = get_icon_for_current_weather(&large_icon_set, &current);
+        let dt = current.dt;
+        // let feels_like = current.feels_like;
+        // let temp = current.temp;
 
-        self.current_weather_icon(&icon)?;
-        self.current_temperature(temp)?;
-        self.current_feels_like(feels_like)?;
-        self.current_temp_unit()?;
-        //self.debug_draw_rect()?;
+        // let large_icon_set = WeatherIconSet::new()?;
+        // let _ = WeatherIconSet::new_small()?;
+        // let icon = get_icon_for_current_weather(&large_icon_set, &current);
+
+        // self.current_weather_icon(&icon)?;
+        // self.current_temperature(temp)?;
+        // self.current_feels_like(feels_like)?;
+        // self.current_temp_unit()?;
+        self.debug_draw_rect()?;
+        self.date_and_location(dt, location_name)?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -126,7 +141,7 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    fn current_weather_icon(&mut self, icon: & Qoi) -> Result<()> {
+    fn current_weather_icon(&mut self, icon: &Qoi) -> Result<()> {
         Image::new(icon, self.rect.current_weather.top_left)
             .draw(&mut self.display.color_converted())?;
         Ok(())
@@ -180,6 +195,35 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
+    fn date_and_location(&mut self, current_time: u64, location_name: &str) -> Result<()> {
+        let large = FontRenderer::new::<fonts::u8g2_font_profont29_tf>();
+        let font = FontRenderer::new::<fonts::u8g2_font_profont22_tf>();
+
+        let offset_dt = time::OffsetDateTime::from_unix_timestamp(current_time as i64)?;
+        let format = time::format_description::parse("[weekday], [day] [month repr:long] [year]")?;
+        let formatted = offset_dt.format(&format)?;
+
+        large.render_aligned(
+            location_name,
+            self.rect.date_location.anchor_point(AnchorPoint::TopRight),
+            VerticalPosition::Top,
+            HorizontalAlignment::Right,
+            FontColor::Transparent(Black),
+            &mut self.display.color_converted(),
+        ).unwrap();
+
+        font.render_aligned(
+            formatted.as_str(),
+            self.rect.date_location.anchor_point(AnchorPoint::TopRight) + Point::new(0, 29),
+            VerticalPosition::Top,
+            HorizontalAlignment::Right,
+            FontColor::Transparent(Black),
+            &mut self.display.color_converted(),
+        ).unwrap();
+
+        Ok(())
+    }
+
     fn update_frame(&mut self) -> Result<()> {
         self.epd.update_frame(&mut self.driver, self.display.buffer(), &mut delay::Ets)?;
         Ok(())
@@ -206,6 +250,10 @@ impl<'a> DisplayManager<'a> {
         self.rect.feels_like.into_styled(style)
             .draw(&mut self.display.color_converted())?;
         self.rect.current_temp_unit.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.date_location.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.forecast.into_styled(style)
             .draw(&mut self.display.color_converted())?;
         Ok(())
     }

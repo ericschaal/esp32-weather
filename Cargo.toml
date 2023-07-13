@@ -49,6 +49,7 @@ embedded-graphics = "0.7.1"
 epd-waveshare = { git = "https://github.com/caemor/epd-waveshare", features = ["graphics"] }
 u8g2-fonts = "0.2.0"
 tinyqoi = "0.1.0"
+time = { version = "0.3.23", features = ["std", "formatting"] }
 
 [build-dependencies]
 embuild = "0.31.2"
