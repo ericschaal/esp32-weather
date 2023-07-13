@@ -1,6 +1,3 @@
-use std::fmt::Debug;
-use std::thread;
-use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -8,27 +5,27 @@ use epd_waveshare::{
     graphics::{VarDisplay},
     prelude::*
 };
-
 use embedded_graphics::{
     prelude::*,
     image::{Image},
     geometry::{AnchorPoint},
     primitives:: {Rectangle, Circle, PrimitiveStyleBuilder},
 };
-use tinyqoi::Qoi;
 use u8g2_fonts::{
     FontRenderer,
     fonts,
     types::{HorizontalAlignment, VerticalPosition, FontColor},
 };
-
 use esp_idf_hal::
-{delay, gpio, peripheral, spi
+{
+    delay,
+    gpio,
+    gpio::{PinDriver},
+    peripheral,
+    prelude::*,
+    spi,
+    spi::{Dma, SpiDriverConfig, SpiConfig}
 };
-use esp_idf_hal::gpio::{PinDriver};
-use esp_idf_hal::prelude::FromValueType;
-use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
-use log::info;
 
 use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
@@ -40,6 +37,11 @@ const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
 
 const MARGIN: u32 = 8;
+
+// Seems like icons have a bunch of padding on the horizontal axis
+// This is a dirty attempt to gain some screen space
+// Padding is actually closer to 32, but this is enough to make things fit
+const IMG_ICON_PADDING: u32 = 16;
 
 impl<'a> DisplayManager<'a> {
     pub fn new(
@@ -73,11 +75,13 @@ impl<'a> DisplayManager<'a> {
             buffer,
             false
         ).unwrap();
-
         let viewport_size = Size::new(WIDTH - MARGIN, HEIGHT - MARGIN);
-        let current_icon_size = Size::new(196, 196);
+        let current_icon_size = Size::new(196 - IMG_ICON_PADDING, 196);
         let current_temp_size = Size::new(196, current_icon_size.height);
-        let current_weather_size = Size::new(current_temp_size.width+ current_icon_size.width, current_icon_size.height);
+
+        let forecast_separator_size = Size::new(IMG_ICON_PADDING, current_icon_size.height);
+
+        let current_weather_size = Size::new(current_temp_size.width + current_icon_size.width + forecast_separator_size.width, current_icon_size.height);
 
         let temp_unit_size = Size::new(32, current_temp_size.height);
         let temp_feels_like_size = Size::new(current_temp_size.width, 32);
@@ -90,6 +94,7 @@ impl<'a> DisplayManager<'a> {
         let weather_icon = Rectangle::new(current_weather.top_left, current_icon_size);
 
         let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), current_temp_size);
+        let forecast_separator = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), forecast_separator_size);
 
         let current_temp_unit = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), temp_unit_size)
             .translate(Point::new(-(temp_unit_size.width as i32), 0));
@@ -97,7 +102,7 @@ impl<'a> DisplayManager<'a> {
         let feels_like = Rectangle::new(current_temp.anchor_point(AnchorPoint::BottomLeft), temp_feels_like_size)
             .translate(Point::new(0, -(temp_feels_like_size.height as i32)));
 
-        let date_location = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), date_location_size);
+        let date_location = Rectangle::new(forecast_separator.anchor_point(AnchorPoint::TopRight), date_location_size);
 
         let forecast = Rectangle::new(date_location.anchor_point(AnchorPoint::BottomLeft), forecast_size);
         let forecasts = [0; 5].iter().enumerate().map(|(i, _)| {
@@ -136,13 +141,14 @@ impl<'a> DisplayManager<'a> {
         let large_icon_set = WeatherIconSet::new()?;
         let small_icon_set = WeatherIconSet::new_small()?;
 
-        self.current_weather_icon(&icon)?;
-        self.current_temperature(temp)?;
+        self.current_weather_icon(&large_icon_set, &current)?;
+        self.current_temperature(&current)?;
         self.current_feels_like(&current)?;
         self.current_temp_unit()?;
-        // self.debug_draw_rect()?;
         self.date_and_location(dt, location_name)?;
         self.daily_forecast(&small_icon_set, &daily)?;
+
+        //self.debug_draw_rect()?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -150,8 +156,10 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    fn current_weather_icon(&mut self, icon: &Qoi) -> Result<()> {
-        Image::new(icon, self.rect.current_weather.top_left)
+    fn current_weather_icon(&mut self, icons: &WeatherIconSet, current: &CurrentWeather) -> Result<()> {
+        let icon = get_icon_for_current_weather(icons, current);
+        Image::new(icon, self.rect.current_weather
+            .translate(Point::new(-(IMG_ICON_PADDING as i32) / 2, 0)).top_left)
             .draw(&mut self.display.color_converted())?;
         Ok(())
     }
@@ -164,7 +172,7 @@ impl<'a> DisplayManager<'a> {
 
         let circle_diameter: u32 = 12;
         let circle_center = Point::new(circle_diameter as i32 / 2, circle_diameter as i32 / 2);
-        let offset = Point::new(0, 46);
+        let offset = Point::new(0, 46); // 46 is half the font size
         Circle::new(
             self.rect.current_temp_unit.center() - offset - circle_center,
             circle_diameter
