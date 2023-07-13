@@ -30,8 +30,8 @@ use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
 use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
 use crate::icons::WeatherIconSet;
-use crate::owm::icons::get_icon_for_current_weather;
-use crate::owm::model::WeatherData;
+use crate::owm::icons::{get_icon_for_current_weather, get_icon_for_daily_forecast};
+use crate::owm::model::{DailyForecast, WeatherData};
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
@@ -95,7 +95,12 @@ impl<'a> DisplayManager<'a> {
             .translate(Point::new(0, -(temp_feels_like_size.height as i32)));
 
         let date_location = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), date_location_size);
+
         let forecast = Rectangle::new(date_location.anchor_point(AnchorPoint::BottomLeft), forecast_size);
+        let forecasts = [0; 5].iter().enumerate().map(|(_, i)| {
+            let size = Size::new(forecast_size.width / 5, forecast_size.height);
+           Rectangle::new(forecast.anchor_point(AnchorPoint::TopLeft) + Point::new((size.width * i) as i32, 0), size)
+        }).collect::<Vec<_>>();
 
         let rect = DisplayRect {
             viewport,
@@ -105,7 +110,8 @@ impl<'a> DisplayManager<'a> {
             feels_like,
             current_temp_unit,
             date_location,
-            forecast
+            forecast,
+            forecasts,
         };
 
         Ok(Self {
@@ -120,13 +126,13 @@ impl<'a> DisplayManager<'a> {
         let app_config = CONFIG;
         let location_name = app_config.location_name;
         let current = data.current.unwrap();
+        let daily = data.daily.unwrap();
         let dt = current.dt;
         // let feels_like = current.feels_like;
         // let temp = current.temp;
 
-        // let large_icon_set = WeatherIconSet::new()?;
-        // let _ = WeatherIconSet::new_small()?;
-        // let icon = get_icon_for_current_weather(&large_icon_set, &current);
+        let large_icon_set = WeatherIconSet::new()?;
+        let small_icon_set = WeatherIconSet::new_small()?;
 
         // self.current_weather_icon(&icon)?;
         // self.current_temperature(temp)?;
@@ -134,6 +140,7 @@ impl<'a> DisplayManager<'a> {
         // self.current_temp_unit()?;
         self.debug_draw_rect()?;
         self.date_and_location(dt, location_name)?;
+        self.daily_forecast(&small_icon_set, &daily)?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -224,6 +231,15 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
+    fn daily_forecast(&mut self, icons: &WeatherIconSet, forecast: &Vec<DailyForecast>) -> Result<()> {
+        for (index, rec) in self.rect.forecasts.iter().enumerate() {
+            let icon = get_icon_for_daily_forecast(icons, &forecast[index]);
+            Image::new(icon, rec.bounding_box().center())
+                .draw(&mut self.display.color_converted())?;
+        }
+        Ok(())
+    }
+
     fn update_frame(&mut self) -> Result<()> {
         self.epd.update_frame(&mut self.driver, self.display.buffer(), &mut delay::Ets)?;
         Ok(())
@@ -255,6 +271,12 @@ impl<'a> DisplayManager<'a> {
             .draw(&mut self.display.color_converted())?;
         self.rect.forecast.into_styled(style)
             .draw(&mut self.display.color_converted())?;
+
+        for rec in self.rect.forecasts.iter() {
+            rec.into_styled(style)
+                .draw(&mut self.display.color_converted())?;
+        }
+
         Ok(())
     }
 

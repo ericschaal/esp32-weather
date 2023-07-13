@@ -37,6 +37,7 @@ pub struct DisplayRect {
     pub current_temp_unit: Rectangle,
     pub date_location: Rectangle,
     pub forecast: Rectangle,
+    pub forecasts: Vec<Rectangle>
 }
 
 pub struct DisplayManagerPins {

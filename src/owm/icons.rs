@@ -1,7 +1,7 @@
 use log::info;
 use tinyqoi::Qoi;
 use crate::icons::{WeatherIcon, WeatherIconSet};
-use crate::owm::model::{CurrentWeather, WeatherConditionId};
+use crate::owm::model::{CurrentWeather, DailyForecast, WeatherConditionId};
 
 pub fn get_icon<'a>(icon: &'a WeatherIcon, night: bool, cloudy: bool, windy: bool) -> &Qoi<'a> {
     if cloudy {
@@ -13,6 +13,16 @@ pub fn get_icon<'a>(icon: &'a WeatherIcon, night: bool, cloudy: bool, windy: boo
     }
 }
 
+pub fn get_icon_for_daily_forecast<'a>(icons: &'a WeatherIconSet, forecast: &'a DailyForecast) -> &'a Qoi<'a> {
+    let is_cloudy = forecast.clouds >= 60;
+    let is_windy = forecast.wind_speed >= 32.2 || forecast.wind_gust.unwrap_or(0.0) >= 40.2;
+
+    let condition = forecast.weather[0].get_condition().unwrap_or(WeatherConditionId::ClearSky);
+
+    get_icon_for_condition(icons, condition, is_cloudy, is_windy, false)
+
+}
+
 pub fn get_icon_for_current_weather<'a>(icons: &'a WeatherIconSet, current: &'a CurrentWeather) -> &'a Qoi<'a> {
     let is_cloudy = current.clouds >= 60;
     let is_windy = current.wind_speed >= 32.2 || current.wind_gust.unwrap_or(0.0) >= 40.2;
@@ -20,8 +30,13 @@ pub fn get_icon_for_current_weather<'a>(icons: &'a WeatherIconSet, current: &'a 
 
     let condition = current.weather[0].get_condition().unwrap_or(WeatherConditionId::ClearSky);
 
-    info!("id: {}, is_night: {}, is_windy: {}, is_cloudy: {}", current.weather[0].id, is_night, is_windy, is_cloudy);
+    // info!("id: {}, is_night: {}, is_windy: {}, is_cloudy: {}", current.weather[0].id, is_night, is_windy, is_cloudy);
 
+    get_icon_for_condition(icons, condition, is_cloudy, is_windy, is_night)
+
+}
+
+fn get_icon_for_condition<'a>(icons: &'a WeatherIconSet, condition: WeatherConditionId, is_cloudy: bool, is_windy: bool, is_night: bool) -> &'a Qoi<'a> {
     match condition {
         WeatherConditionId::ThunderstormWithLightRain => get_icon(&icons.thunderstorm, is_night, is_cloudy, is_windy),
         WeatherConditionId::ThunderstormWithRain => get_icon(&icons.thunderstorm, is_night, is_cloudy, is_windy),
@@ -79,5 +94,4 @@ pub fn get_icon_for_current_weather<'a>(icons: &'a WeatherIconSet, current: &'a 
         WeatherConditionId::BrokenClouds => get_icon(&icons.scattered, is_night, is_cloudy, is_windy),
         WeatherConditionId::OvercastClouds => get_icon(&icons.scattered, is_night, is_cloudy, is_windy),
     }
-
 }
