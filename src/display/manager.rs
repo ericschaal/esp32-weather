@@ -8,12 +8,11 @@ use epd_waveshare::{
 
 use embedded_graphics::{
     prelude::*,
-    image::{ImageRaw, Image},
-    pixelcolor::{BinaryColor},
-    primitives:: {Rectangle},
+    image::{Image},
+    geometry::{AnchorPoint},
+    primitives:: {Rectangle, Circle, PrimitiveStyleBuilder},
 };
-use embedded_graphics::geometry::AnchorPoint;
-use embedded_graphics::primitives::PrimitiveStyleBuilder;
+use tinyqoi::Qoi;
 use u8g2_fonts::{
     FontRenderer,
     fonts,
@@ -28,8 +27,9 @@ use esp_idf_hal::prelude::FromValueType;
 use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
 
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
-use crate::icons::i196x196::WI_DAY_SNOW_THUNDERSTORM_196X196;
-
+use crate::icons::WeatherIconSet;
+use crate::owm::icons::get_icon_for_current_weather;
+use crate::owm::model::WeatherData;
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
@@ -69,17 +69,32 @@ impl<'a> DisplayManager<'a> {
             false
         ).unwrap();
 
-        let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), Size::new(WIDTH - MARGIN, HEIGHT - MARGIN));
-        let current_weather = Rectangle::new(viewport.top_left, Size::new(2 * 196,196));
-        let weather_icon = Rectangle::new(current_weather.top_left, Size::new(196,196));
-        let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), Size::new(196,196));
+        let weather_icon_size = Size::new(196, 196);
+        let temp_rect_size = Size::new(196, weather_icon_size.height);
+        let weather_rect_size = Size::new(temp_rect_size.width+ weather_icon_size.width, weather_icon_size.height);
 
+        let temp_unit_size = Size::new(32, temp_rect_size.height);
+        let temp_feels_like_size = Size::new(temp_rect_size.width, 32);
+
+        let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), Size::new(WIDTH - MARGIN, HEIGHT - MARGIN));
+        let current_weather = Rectangle::new(viewport.top_left, weather_rect_size);
+        let weather_icon = Rectangle::new(current_weather.top_left, weather_icon_size);
+
+        let current_temp = Rectangle::new(weather_icon.anchor_point(AnchorPoint::TopRight), temp_rect_size);
+
+        let current_temp_unit = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), temp_unit_size)
+            .translate(Point::new(-(temp_unit_size.width as i32), 0));
+
+        let feels_like = Rectangle::new(current_temp.anchor_point(AnchorPoint::BottomLeft), temp_feels_like_size)
+            .translate(Point::new(0, -(temp_feels_like_size.height as i32)));
 
         let rect = DisplayRect {
             viewport,
             current_weather,
             weather_icon,
             current_temp,
+            feels_like,
+            current_temp_unit
         };
 
         Ok(Self {
@@ -90,10 +105,20 @@ impl<'a> DisplayManager<'a> {
         })
     }
 
-    pub fn build_frame(&mut self) -> Result<()> {
-        self.current_weather_icon()?;
-        self.current_temperature_txt()?;
-        self.draw_rect()?;
+    pub fn draw_weather_report(&mut self, data: WeatherData) -> Result<()> {
+
+        let current = data.current.unwrap();
+        let feels_like = current.feels_like;
+        let temp = current.temp;
+        let large_icon_set = WeatherIconSet::new()?;
+        let _ = WeatherIconSet::new_small()?;
+        let icon = get_icon_for_current_weather(&large_icon_set, &current);
+
+        self.current_weather_icon(&icon)?;
+        self.current_temperature(temp)?;
+        self.current_feels_like(feels_like)?;
+        self.current_temp_unit()?;
+        //self.debug_draw_rect()?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -101,31 +126,51 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    pub fn draw_rect(&mut self) -> Result<()> {
-        let style = PrimitiveStyleBuilder::new()
+    fn current_weather_icon(&mut self, icon: & Qoi) -> Result<()> {
+        Image::new(icon, self.rect.current_weather.top_left)
+            .draw(&mut self.display.color_converted())?;
+        Ok(())
+    }
+
+    fn current_temp_unit(&mut self) -> Result<()> {
+        let unit_style = PrimitiveStyleBuilder::new()
+            .stroke_width(4)
             .stroke_color(Black)
-            .fill_color(White)
-            .stroke_width(1)
             .build();
-        self.rect.viewport.into_styled(style)
+
+        let circle_diameter: u32 = 12;
+        let circle_center = Point::new(circle_diameter as i32 / 2, circle_diameter as i32 / 2);
+        let offset = Point::new(0, 46);
+        Circle::new(
+            self.rect.current_temp_unit.center() - offset - circle_center,
+            circle_diameter
+        ).into_styled(unit_style)
             .draw(&mut self.display.color_converted())?;
+
         Ok(())
     }
 
-    pub fn current_weather_icon(&mut self) -> Result<()> {
-        let raw_image = ImageRaw::<BinaryColor>::new(WI_DAY_SNOW_THUNDERSTORM_196X196 , 196);
-        Image::new(&raw_image, self.rect.current_weather.top_left)
-            .draw(&mut self.display.color_converted())?;
+    fn current_feels_like(&mut self, feels_like: f32) -> Result<()> {
+        let font = FontRenderer::new::<fonts::u8g2_font_profont22_tf>();
+
+        font.render_aligned(
+            format_args!("Feels Like {}°", feels_like.round() as i32),
+            self.rect.feels_like.bounding_box().center(),
+            VerticalPosition::Center,
+            HorizontalAlignment::Center,
+            FontColor::Transparent(Black),
+            &mut self.display.color_converted(),
+        ).unwrap();
+
         Ok(())
     }
 
-    pub fn current_temperature_txt(&mut self) -> Result<()> {
-        let font = FontRenderer::new::<fonts::u8g2_font_logisoso92_tn>();
-        let text = "32";
+    fn current_temperature(&mut self, temp: f32) -> Result<()> {
+        let large_font = FontRenderer::new::<fonts::u8g2_font_logisoso92_tn>();
 
-        let _ = font.render_aligned(
-            text,
-            self.rect.current_temp.top_left,
+        large_font.render_aligned(
+            format_args!("{}", temp.round() as i32),
+            self.rect.current_temp.bounding_box().center(),
             VerticalPosition::Center,
             HorizontalAlignment::Center,
             FontColor::Transparent(Black),
@@ -142,6 +187,26 @@ impl<'a> DisplayManager<'a> {
 
     fn display_frame(&mut self) -> Result<()> {
         self.epd.display_frame(&mut self.driver, &mut delay::Ets)?;
+        Ok(())
+    }
+
+    fn debug_draw_rect(&mut self) -> Result<()> {
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_color(Black)
+            .stroke_width(1)
+            .build();
+        self.rect.viewport.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.current_weather.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.weather_icon.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.current_temp.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.feels_like.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.current_temp_unit.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
         Ok(())
     }
 

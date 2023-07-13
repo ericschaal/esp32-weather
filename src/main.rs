@@ -13,6 +13,8 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use crate::display::{DisplayManager, DisplayManagerPins};
+use crate::owm::api::fetch_owm_report;
+use crate::wifi::WifiManager;
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
@@ -23,13 +25,10 @@ fn main() -> Result<()> {
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let pins = peripherals.pins;
 
-    // let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
-    // wifi.connect()?;
-    //
-    // let weather = fetch_owm_report(45.5019, 73.5674).unwrap();
-    // info!("Weather report: {:?}", weather);
-    //
-    // wifi.disconnect()?;
+    let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
+    wifi.connect()?;
+    let weather = fetch_owm_report(45.5019, -73.5674).unwrap();
+    wifi.disconnect()?;
 
     let spi = peripherals.spi2;
     let sclk = pins.gpio19;
@@ -53,8 +52,7 @@ fn main() -> Result<()> {
         &mut buffer
     )?;
 
-
-    display.build_frame()?;
+    display.draw_weather_report(weather)?;
 
 
 

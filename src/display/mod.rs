@@ -33,6 +33,8 @@ pub struct DisplayRect {
     pub current_weather: Rectangle,
     pub weather_icon: Rectangle,
     pub current_temp: Rectangle,
+    pub feels_like: Rectangle,
+    pub current_temp_unit: Rectangle,
 }
 
 pub struct DisplayManagerPins {
