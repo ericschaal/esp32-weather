@@ -13,6 +13,8 @@ pub struct WeatherIcon {
 }
 
 pub struct WeatherIconSet {
+    pub WIDTH: u32,
+    pub HEIGHT: u32,
     pub clear: WeatherIcon,
     pub few_clouds: WeatherIcon,
     pub scattered: WeatherIcon,
@@ -277,6 +279,8 @@ impl WeatherIconSet {
         };
 
         Ok(Self {
+            HEIGHT: 196,
+            WIDTH: 196,
             clear,
             few_clouds,
             scattered,
@@ -523,6 +527,8 @@ impl WeatherIconSet {
         };
 
         Ok(Self {
+            HEIGHT: 64,
+            WIDTH: 64,
             clear,
             few_clouds,
             scattered,

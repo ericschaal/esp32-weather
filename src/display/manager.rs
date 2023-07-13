@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+use std::thread;
+use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -26,12 +28,13 @@ use esp_idf_hal::
 use esp_idf_hal::gpio::{PinDriver};
 use esp_idf_hal::prelude::FromValueType;
 use esp_idf_hal::spi::{Dma, SpiDriverConfig, SpiConfig};
+use log::info;
 
 use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
 use crate::icons::WeatherIconSet;
 use crate::owm::icons::{get_icon_for_current_weather, get_icon_for_daily_forecast};
-use crate::owm::model::{DailyForecast, WeatherData};
+use crate::owm::model::{CurrentWeather, DailyForecast, WeatherData};
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
@@ -97,9 +100,10 @@ impl<'a> DisplayManager<'a> {
         let date_location = Rectangle::new(current_temp.anchor_point(AnchorPoint::TopRight), date_location_size);
 
         let forecast = Rectangle::new(date_location.anchor_point(AnchorPoint::BottomLeft), forecast_size);
-        let forecasts = [0; 5].iter().enumerate().map(|(_, i)| {
+        let forecasts = [0; 5].iter().enumerate().map(|(i, _)| {
             let size = Size::new(forecast_size.width / 5, forecast_size.height);
-           Rectangle::new(forecast.anchor_point(AnchorPoint::TopLeft) + Point::new((size.width * i) as i32, 0), size)
+            let offset_x = size.width * i as u32;
+           Rectangle::new(forecast.anchor_point(AnchorPoint::TopLeft) + Point::new(offset_x as i32, 0), size)
         }).collect::<Vec<_>>();
 
         let rect = DisplayRect {
@@ -128,17 +132,15 @@ impl<'a> DisplayManager<'a> {
         let current = data.current.unwrap();
         let daily = data.daily.unwrap();
         let dt = current.dt;
-        // let feels_like = current.feels_like;
-        // let temp = current.temp;
 
         let large_icon_set = WeatherIconSet::new()?;
         let small_icon_set = WeatherIconSet::new_small()?;
 
-        // self.current_weather_icon(&icon)?;
-        // self.current_temperature(temp)?;
-        // self.current_feels_like(feels_like)?;
-        // self.current_temp_unit()?;
-        self.debug_draw_rect()?;
+        self.current_weather_icon(&icon)?;
+        self.current_temperature(temp)?;
+        self.current_feels_like(&current)?;
+        self.current_temp_unit()?;
+        // self.debug_draw_rect()?;
         self.date_and_location(dt, location_name)?;
         self.daily_forecast(&small_icon_set, &daily)?;
 
@@ -172,11 +174,11 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    fn current_feels_like(&mut self, feels_like: f32) -> Result<()> {
+    fn current_feels_like(&mut self, current: &CurrentWeather) -> Result<()> {
         let font = FontRenderer::new::<fonts::u8g2_font_profont22_tf>();
 
         font.render_aligned(
-            format_args!("Feels Like {}°", feels_like.round() as i32),
+            format_args!("Feels Like {}°", current.feels_like.round() as i32),
             self.rect.feels_like.bounding_box().center(),
             VerticalPosition::Center,
             HorizontalAlignment::Center,
@@ -187,11 +189,11 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    fn current_temperature(&mut self, temp: f32) -> Result<()> {
+    fn current_temperature(&mut self, current: &CurrentWeather) -> Result<()> {
         let large_font = FontRenderer::new::<fonts::u8g2_font_logisoso92_tn>();
 
         large_font.render_aligned(
-            format_args!("{}", temp.round() as i32),
+            format_args!("{}", current.temp.round() as i32),
             self.rect.current_temp.bounding_box().center(),
             VerticalPosition::Center,
             HorizontalAlignment::Center,
@@ -233,9 +235,42 @@ impl<'a> DisplayManager<'a> {
 
     fn daily_forecast(&mut self, icons: &WeatherIconSet, forecast: &Vec<DailyForecast>) -> Result<()> {
         for (index, rec) in self.rect.forecasts.iter().enumerate() {
-            let icon = get_icon_for_daily_forecast(icons, &forecast[index]);
-            Image::new(icon, rec.bounding_box().center())
+            let daily = &forecast[index];
+            let icon = get_icon_for_daily_forecast(icons, daily);
+            let img_center_offset = Point::new((icons.WIDTH / 2) as i32, (icons.HEIGHT / 2) as i32);
+
+            let _ = Image::new(icon, rec.bounding_box().center() - img_center_offset)
                 .draw(&mut self.display.color_converted())?;
+
+            let txt_offset = Point::new(0, (icons.HEIGHT / 2 + MARGIN) as i32);
+
+            // Draw day of week
+            let font = FontRenderer::new::<fonts::u8g2_font_profont22_tf>();
+            let font_small = FontRenderer::new::<fonts::u8g2_font_profont17_tf>();
+            let offset_dt = time::OffsetDateTime::from_unix_timestamp(daily.dt as i64)?;
+            let format = time::format_description::parse("[weekday repr:short]")?;
+            let day_formatted = offset_dt.format(&format)?;
+
+
+            font.render_aligned(
+                day_formatted.as_str(),
+                rec.bounding_box().center() - txt_offset,
+                VerticalPosition::Bottom,
+                HorizontalAlignment::Center,
+                FontColor::Transparent(Black),
+                &mut self.display.color_converted(),
+            ).unwrap();
+
+            font_small.render_aligned(
+                format_args!("{}°|{}°", daily.temp.min.round(), daily.temp.max.round()),
+                rec.bounding_box().center() + txt_offset,
+                VerticalPosition::Top,
+                HorizontalAlignment::Center,
+                FontColor::Transparent(Black),
+                &mut self.display.color_converted(),
+            ).unwrap();
+
+
         }
         Ok(())
     }
