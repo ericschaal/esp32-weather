@@ -16,7 +16,7 @@ use embedded_graphics::{
 use embedded_graphics::mono_font::ascii::FONT_8X13;
 use embedded_graphics::mono_font::{MonoTextStyleBuilder};
 use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::primitives::StyledDrawable;
+use embedded_graphics::primitives::Line;
 use u8g2_fonts::{
     FontRenderer,
     fonts,
@@ -282,7 +282,6 @@ impl<'a> DisplayManager<'a> {
             let format = time::format_description::parse("[weekday repr:short]")?;
             let day_formatted = offset_dt.format(&format)?;
 
-
             font.render_aligned(
                 day_formatted.as_str(),
                 rec.bounding_box().center() - txt_offset,
@@ -326,17 +325,17 @@ impl<'a> DisplayManager<'a> {
         let (x_min, x_max) = temp.iter().map(|p| p.x).minmax().into_option().unwrap();
         let (temp_min, temp_max) = temp.iter().map(|p| p.y).minmax().into_option().unwrap();
 
-        // Try to have a 15° range
+        // Try to have a 20° range
         let temp_range = {
-            let new_min = cmp::min(temp_min, temp_max - 15);
-            let new_max = cmp::max(temp_max,temp_min + 15);
+            let new_min = temp_min / 10 * 10;
+            let new_max = new_min + 20;
 
-            new_min..new_max
+            new_min..new_max + 1
         };
 
         // Layout rectangles
         let margin: u32 = 4;
-        let axis_rec_dim = 12;
+        let axis_rec_dim = 16;
         let curve_size = Size::new(
             self.rect.chart.size.width - 2 * margin - 2 * axis_rec_dim,
             self.rect.chart.size.height - 2 * margin -  axis_rec_dim
@@ -374,6 +373,17 @@ impl<'a> DisplayManager<'a> {
         // curve_rec.into_styled(style).draw(&mut self.display.color_converted())?;
         // bottom_axis_rec.into_styled(style).draw(&mut self.display.color_converted())?;
 
+        for row_index in 0..5 {
+            let spacing = curve_rec.size.height / 5;
+            let v_offset = Point::new(0, (spacing * row_index) as i32);
+            Line::new(
+                curve_rec.top_left + v_offset,
+                curve_rec.anchor_point(AnchorPoint::TopRight) + v_offset
+            ).into_styled(style)
+                .draw(&mut self.display.color_converted())?;
+        }
+
+
         // Temperature
         LineChart::new(temp.as_slice(), None, Some(temp_range.clone()))
             .into_drawable_curve(
@@ -399,7 +409,7 @@ impl<'a> DisplayManager<'a> {
             .text_color(BinaryColor::Off)
             .build();
 
-        Axis::new(x_min..x_max)
+        Axis::new(x_min..x_max + 1)
             .set_scale(Scale::Fixed(3600*2))
             .into_drawable_axis(
                 Placement::X {

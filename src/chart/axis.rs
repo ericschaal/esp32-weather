@@ -1,5 +1,4 @@
-use core::{fmt::Write, ops::Range};
-use std::ops::RangeBounds;
+use core::{ops::Range};
 
 use embedded_graphics::{
     prelude::*,
@@ -196,7 +195,6 @@ impl<'a, C> Drawable for DrawableAxis<'a, C>
                     .into_styled(PrimitiveStyle::with_stroke(color, thickness as u32))
                     .draw(display)?;
 
-                let mut tick_text_left_pos_bound = i32::MAX;
                 for mark in scale_marks {
                     let y = mark.scale_between_ranges(&self.axis.range, &(y2..y1));
                     Line {
