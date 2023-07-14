@@ -1,5 +1,4 @@
 use std::{cmp, thread};
-use std::collections::btree_set::Range;
 use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
@@ -14,7 +13,10 @@ use embedded_graphics::{
     geometry::{AnchorPoint},
     primitives:: {Rectangle, Circle, PrimitiveStyleBuilder},
 };
+use embedded_graphics::mono_font::ascii::FONT_8X13;
+use embedded_graphics::mono_font::{MonoTextStyleBuilder};
 use embedded_graphics::pixelcolor::BinaryColor;
+use embedded_graphics::primitives::StyledDrawable;
 use u8g2_fonts::{
     FontRenderer,
     fonts,
@@ -32,8 +34,10 @@ use esp_idf_hal::
 };
 use itertools::Itertools;
 
+use crate::chart::axis::{Axis, Placement, Scale};
 use crate::chart::bar::{BarChart};
 use crate::chart::line::LineChart;
+
 use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
 use crate::icons::WeatherIconSet;
@@ -167,7 +171,7 @@ impl<'a> DisplayManager<'a> {
         self.debug_draw_rect()?;
 
         thread::sleep(Duration::from_millis(1000));
-        self.chart(&hourly)?;
+        self.chart(data.timezone_offset, &hourly)?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -302,40 +306,76 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
-    fn chart(&mut self, forecast: &Vec<HourlyForecast>) -> Result<()> {
+    fn chart(&mut self, timezone_offset: i64, forecast: &Vec<HourlyForecast>) -> Result<()> {
         let app_config = CONFIG;
-        let offset = forecast[0].dt;
-
-        let (temp_min, temp_max) = forecast.iter().map(|hourly| hourly.temp).minmax().into_option().unwrap();
-
-        // Try to have a 15° range
-        let temp_range = {
-            let new_min = cmp::min(temp_min.round() as i32, temp_max.round() as i32 - 15);
-            let new_max = cmp::max(temp_max.round() as i32,temp_min.round() as i32 + 15);
-
-            new_min..new_max
-        };
 
         let temp = forecast.iter().map(|hourly| {
-           Point { x: (hourly.dt - offset) as i32, y: hourly.temp.round() as i32 }
+           Point { x: (hourly.dt) as i32, y: hourly.temp.round() as i32 }
         })
             .take(app_config.hours_to_draw)
             .collect::<Vec<_>>();
 
         // From 0 to 100%
         let precip = forecast.iter().map(|hourly| {
-            Point { x: (hourly.dt - offset) as i32, y: hourly.pop as i32 * 100 }
+            Point { x: (hourly.dt) as i32, y: hourly.pop as i32 * 100 }
         })
             .take(app_config.hours_to_draw)
             .collect::<Vec<_>>();
 
-        let margin: u32 = 8;
-        let curve_rec = Rectangle::new(
-            self.rect.chart.top_left + Point::new(8, 8),
-            Size::new(self.rect.chart.size.width - 2 * margin, self.rect.chart.size.height - 2 * margin)
+
+        let (x_min, x_max) = temp.iter().map(|p| p.x).minmax().into_option().unwrap();
+        let (temp_min, temp_max) = temp.iter().map(|p| p.y).minmax().into_option().unwrap();
+
+        // Try to have a 15° range
+        let temp_range = {
+            let new_min = cmp::min(temp_min, temp_max - 15);
+            let new_max = cmp::max(temp_max,temp_min + 15);
+
+            new_min..new_max
+        };
+
+        // Layout rectangles
+        let margin: u32 = 4;
+        let axis_rec_dim = 12;
+        let curve_size = Size::new(
+            self.rect.chart.size.width - 2 * margin - 2 * axis_rec_dim,
+            self.rect.chart.size.height - 2 * margin -  axis_rec_dim
         );
 
-        LineChart::new(temp.as_slice(), None, Some(temp_range))
+        let left_axis_rec = Rectangle::new(
+            self.rect.chart.top_left + Point::new(margin as i32, margin as i32),
+            Size::new(axis_rec_dim, curve_size.height)
+        );
+
+
+        let curve_rec = Rectangle::new(
+            left_axis_rec.anchor_point(AnchorPoint::TopRight),
+            Size::new(curve_size.width, curve_size.height)
+        );
+
+        let bottom_axis_rec = Rectangle::new(
+            curve_rec.anchor_point(AnchorPoint::BottomLeft),
+            Size::new(curve_size.width, axis_rec_dim)
+        );
+
+        let right_axis_rec = Rectangle::new(
+            curve_rec.anchor_point(AnchorPoint::TopRight),
+            Size::new(axis_rec_dim, curve_size.height)
+        );
+
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_color(Black)
+            .stroke_width(1)
+            .build();
+
+        // curve_rec.into_styled(style).draw(&mut self.display.color_converted())?;
+        // left_axis_rec.into_styled(style).draw(&mut self.display.color_converted())?;
+        // right_axis_rec.into_styled(style).draw(&mut self.display.color_converted())?;
+        // curve_rec.into_styled(style).draw(&mut self.display.color_converted())?;
+        // bottom_axis_rec.into_styled(style).draw(&mut self.display.color_converted())?;
+
+        // Temperature
+        LineChart::new(temp.as_slice(), None, Some(temp_range.clone()))
             .into_drawable_curve(
                 &curve_rec.top_left,
                 &curve_rec.anchor_point(AnchorPoint::BottomRight)
@@ -343,6 +383,7 @@ impl<'a> DisplayManager<'a> {
             .set_thickness(2)
             .draw(&mut self.display.color_converted())?;
 
+        // Precipitation
         BarChart::new(precip.as_slice(), None, Some(0..100))
             .into_drawable_curve(
                 &curve_rec.top_left,
@@ -352,19 +393,57 @@ impl<'a> DisplayManager<'a> {
             .set_fill(true)
             .draw(&mut self.display.color_converted())?;
 
-        //
-        // let plot = SinglePlot::new(
-        //     &curve,
-        //     Scale::Fixed(3600),
-        //     Scale::Fixed(10)
-        // )
-        //     .into_drawable(
-        //         self.rect.chart.top_left,
-        //         self.rect.chart.anchor_point(AnchorPoint::BottomRight)
-        //     )
-        //     .set_color(BinaryColor::Off);
-        //
-        // plot.draw(&mut self.display.color_converted()).unwrap();
+        // X Axis
+        let text_style = MonoTextStyleBuilder::new()
+            .font(&FONT_8X13)
+            .text_color(BinaryColor::Off)
+            .build();
+
+        Axis::new(x_min..x_max)
+            .set_scale(Scale::Fixed(3600*2))
+            .into_drawable_axis(
+                Placement::X {
+                    x1: bottom_axis_rec.anchor_point(AnchorPoint::TopLeft).x,
+                    x2: bottom_axis_rec.anchor_point(AnchorPoint::TopRight).x,
+                    y: bottom_axis_rec.bounding_box().center().y,
+                }
+            )
+            .set_text_style(text_style)
+            .set_color(BinaryColor::Off)
+            .set_text_render(&|x| {
+                let offset_dt = time::OffsetDateTime::from_unix_timestamp(x as i64 + timezone_offset).unwrap();
+                let format = time::format_description::parse("[hour repr:24]").unwrap();
+                let day_formatted = offset_dt.format(&format).unwrap();
+
+                day_formatted
+            }).draw(&mut self.display.color_converted())?;
+
+        // Y Axis (Temperature)
+        Axis::new(temp_range.clone())
+            .set_scale(Scale::RangeFraction(5))
+            .into_drawable_axis(Placement::Y {
+                y1: left_axis_rec.anchor_point(AnchorPoint::TopRight).y,
+                y2: left_axis_rec.anchor_point(AnchorPoint::BottomRight).y,
+                x: left_axis_rec.bounding_box().center().x,
+            })
+            .set_text_style(text_style)
+            .set_thickness(0)
+            .set_color(BinaryColor::Off)
+            .draw(&mut self.display.color_converted())?;
+
+        // Y Axis Precipitation
+        Axis::new(0..101)
+            .set_scale(Scale::RangeFraction(5))
+            .into_drawable_axis(Placement::Y {
+                y1: right_axis_rec.anchor_point(AnchorPoint::TopRight).y,
+                y2: right_axis_rec.anchor_point(AnchorPoint::BottomRight).y,
+                x: right_axis_rec.bounding_box().center().x,
+            })
+            .set_text_style(text_style)
+            .set_thickness(0)
+            .set_color(BinaryColor::Off)
+            .draw(&mut self.display.color_converted())?;
+
         Ok(())
     }
 
