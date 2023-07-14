@@ -1,3 +1,6 @@
+use std::{cmp, thread};
+use std::collections::btree_set::Range;
+use std::time::Duration;
 use anyhow::{Result};
 use epd_waveshare::{
     color::Color::{Black as White, White as Black},
@@ -11,6 +14,7 @@ use embedded_graphics::{
     geometry::{AnchorPoint},
     primitives:: {Rectangle, Circle, PrimitiveStyleBuilder},
 };
+use embedded_graphics::pixelcolor::BinaryColor;
 use u8g2_fonts::{
     FontRenderer,
     fonts,
@@ -26,12 +30,15 @@ use esp_idf_hal::
     spi,
     spi::{Dma, SpiDriverConfig, SpiConfig}
 };
+use itertools::Itertools;
 
+use crate::chart::bar::{BarChart};
+use crate::chart::line::LineChart;
 use crate::config::CONFIG;
 use crate::display::{DisplayManager, DisplayManagerPins, DisplayRect};
 use crate::icons::WeatherIconSet;
 use crate::owm::icons::{get_icon_for_current_weather, get_icon_for_daily_forecast};
-use crate::owm::model::{CurrentWeather, DailyForecast, WeatherData};
+use crate::owm::model::{CurrentWeather, DailyForecast, HourlyForecast, WeatherData};
 
 const SCREEN_BUFFER_SIZE: usize =  WIDTH as usize / 8 * HEIGHT as usize;
 const DEFAULT_COLOR: Color = White;
@@ -56,7 +63,7 @@ impl<'a> DisplayManager<'a> {
             Option::<gpio::AnyIOPin>::None,
             Option::<gpio::AnyOutputPin>::None,
             &SpiDriverConfig::new().dma(Dma::Disabled),
-            &SpiConfig::new().baudrate(12.MHz().into()),
+            &SpiConfig::new().baudrate(8.MHz().into()),
         )?;
 
         let epd = Epd7in5::new(
@@ -89,6 +96,9 @@ impl<'a> DisplayManager<'a> {
         let date_location_size = Size::new(viewport_size.width - current_weather_size.width, 64);
         let forecast_size = Size::new(viewport_size.width - current_weather_size.width, current_weather_size.height - date_location_size.height);
 
+        let metrics_size = Size::new(294, viewport_size.height - current_weather_size.height);
+        let chart_size = Size::new(viewport_size.width - metrics_size.width, viewport_size.height - current_weather_size.height);
+
         let viewport = Rectangle::new(Point::new(MARGIN as i32, MARGIN as i32), viewport_size);
         let current_weather = Rectangle::new(viewport.top_left, current_weather_size);
         let weather_icon = Rectangle::new(current_weather.top_left, current_icon_size);
@@ -111,6 +121,9 @@ impl<'a> DisplayManager<'a> {
            Rectangle::new(forecast.anchor_point(AnchorPoint::TopLeft) + Point::new(offset_x as i32, 0), size)
         }).collect::<Vec<_>>();
 
+        let metrics = Rectangle::new(current_weather.anchor_point(AnchorPoint::BottomLeft), metrics_size);
+        let chart = Rectangle::new(metrics.anchor_point(AnchorPoint::TopRight), chart_size);
+
         let rect = DisplayRect {
             viewport,
             current_weather,
@@ -121,6 +134,8 @@ impl<'a> DisplayManager<'a> {
             date_location,
             forecast,
             forecasts,
+            metrics,
+            chart,
         };
 
         Ok(Self {
@@ -136,6 +151,7 @@ impl<'a> DisplayManager<'a> {
         let location_name = app_config.location_name;
         let current = data.current.unwrap();
         let daily = data.daily.unwrap();
+        let hourly = data.hourly.unwrap();
         let dt = current.dt;
 
         let large_icon_set = WeatherIconSet::new()?;
@@ -148,7 +164,10 @@ impl<'a> DisplayManager<'a> {
         self.date_and_location(dt, location_name)?;
         self.daily_forecast(&small_icon_set, &daily)?;
 
-        //self.debug_draw_rect()?;
+        self.debug_draw_rect()?;
+
+        thread::sleep(Duration::from_millis(1000));
+        self.chart(&hourly)?;
 
         self.update_frame()?;
         self.display_frame()?;
@@ -283,6 +302,72 @@ impl<'a> DisplayManager<'a> {
         Ok(())
     }
 
+    fn chart(&mut self, forecast: &Vec<HourlyForecast>) -> Result<()> {
+        let app_config = CONFIG;
+        let offset = forecast[0].dt;
+
+        let (temp_min, temp_max) = forecast.iter().map(|hourly| hourly.temp).minmax().into_option().unwrap();
+
+        // Try to have a 15° range
+        let temp_range = {
+            let new_min = cmp::min(temp_min.round() as i32, temp_max.round() as i32 - 15);
+            let new_max = cmp::max(temp_max.round() as i32,temp_min.round() as i32 + 15);
+
+            new_min..new_max
+        };
+
+        let temp = forecast.iter().map(|hourly| {
+           Point { x: (hourly.dt - offset) as i32, y: hourly.temp.round() as i32 }
+        })
+            .take(app_config.hours_to_draw)
+            .collect::<Vec<_>>();
+
+        // From 0 to 100%
+        let precip = forecast.iter().map(|hourly| {
+            Point { x: (hourly.dt - offset) as i32, y: hourly.pop as i32 * 100 }
+        })
+            .take(app_config.hours_to_draw)
+            .collect::<Vec<_>>();
+
+        let margin: u32 = 8;
+        let curve_rec = Rectangle::new(
+            self.rect.chart.top_left + Point::new(8, 8),
+            Size::new(self.rect.chart.size.width - 2 * margin, self.rect.chart.size.height - 2 * margin)
+        );
+
+        LineChart::new(temp.as_slice(), None, Some(temp_range))
+            .into_drawable_curve(
+                &curve_rec.top_left,
+                &curve_rec.anchor_point(AnchorPoint::BottomRight)
+            ).set_color(BinaryColor::Off)
+            .set_thickness(2)
+            .draw(&mut self.display.color_converted())?;
+
+        BarChart::new(precip.as_slice(), None, Some(0..100))
+            .into_drawable_curve(
+                &curve_rec.top_left,
+                &curve_rec.anchor_point(AnchorPoint::BottomRight)
+            ).set_color(BinaryColor::Off)
+            .set_thickness(1)
+            .set_fill(true)
+            .draw(&mut self.display.color_converted())?;
+
+        //
+        // let plot = SinglePlot::new(
+        //     &curve,
+        //     Scale::Fixed(3600),
+        //     Scale::Fixed(10)
+        // )
+        //     .into_drawable(
+        //         self.rect.chart.top_left,
+        //         self.rect.chart.anchor_point(AnchorPoint::BottomRight)
+        //     )
+        //     .set_color(BinaryColor::Off);
+        //
+        // plot.draw(&mut self.display.color_converted()).unwrap();
+        Ok(())
+    }
+
     fn update_frame(&mut self) -> Result<()> {
         self.epd.update_frame(&mut self.driver, self.display.buffer(), &mut delay::Ets)?;
         Ok(())
@@ -298,27 +383,32 @@ impl<'a> DisplayManager<'a> {
             .stroke_color(Black)
             .stroke_width(1)
             .build();
-        self.rect.viewport.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.current_weather.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.weather_icon.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.current_temp.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.feels_like.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.current_temp_unit.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.date_location.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
-        self.rect.forecast.into_styled(style)
-            .draw(&mut self.display.color_converted())?;
+        // self.rect.viewport.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.current_weather.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.weather_icon.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.current_temp.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.feels_like.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.current_temp_unit.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.date_location.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        // self.rect.forecast.into_styled(style)
+        //     .draw(&mut self.display.color_converted())?;
+        //
+        // for rec in self.rect.forecasts.iter() {
+        //     rec.into_styled(style)
+        //         .draw(&mut self.display.color_converted())?;
+        // }
 
-        for rec in self.rect.forecasts.iter() {
-            rec.into_styled(style)
-                .draw(&mut self.display.color_converted())?;
-        }
+        self.rect.metrics.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
+        self.rect.chart.into_styled(style)
+            .draw(&mut self.display.color_converted())?;
 
         Ok(())
     }

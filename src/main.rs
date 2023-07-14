@@ -4,6 +4,7 @@ mod owm;
 mod display;
 mod http_client;
 mod icons;
+mod chart;
 
 use std::thread;
 use std::time::Duration;

@@ -5,3 +5,4 @@ owm_api_key = ""
 latitude = 0.0
 longitude = 0.0
 location_name = ""
+hours_to_draw=12

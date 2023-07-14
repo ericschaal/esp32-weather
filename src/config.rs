@@ -13,4 +13,6 @@ pub struct Config {
     latitude: f32,
     #[default(-73.5674)]
     longitude: f32,
+    #[default(8)]
+    hours_to_draw: usize,
 }
