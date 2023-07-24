@@ -5,7 +5,7 @@ pub struct WeatherData {
     pub lat: f32,
     pub lon: f32,
     pub timezone: String,
-    pub timezone_offset: i32,
+    pub timezone_offset: i64,
     pub current: Option<CurrentWeather>,
     pub minutely: Option<Vec<MinuteForecast>>,
     pub hourly: Option<Vec<HourlyForecast>>,

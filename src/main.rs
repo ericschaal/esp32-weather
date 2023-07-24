@@ -3,12 +3,12 @@ mod wifi;
 mod owm;
 mod display;
 mod http_client;
+mod icons;
+mod chart;
 
 use std::thread;
 use std::time::Duration;
 use anyhow::{Result};
-use esp_idf_sys as _;
-use log::*;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -16,7 +16,6 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use crate::display::{DisplayManager, DisplayManagerPins};
 use crate::owm::api::fetch_owm_report;
 use crate::wifi::WifiManager;
-
 
 fn main() -> Result<()> {
     esp_idf_sys::link_patches();
@@ -27,13 +26,10 @@ fn main() -> Result<()> {
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let pins = peripherals.pins;
 
-    // let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
-    // wifi.connect()?;
-    //
-    // let weather = fetch_owm_report(45.5019, 73.5674).unwrap();
-    // info!("Weather report: {:?}", weather);
-    //
-    // wifi.disconnect()?;
+    let mut wifi = WifiManager::new(peripherals.modem, sys_loop, nvs)?;
+    wifi.connect()?;
+
+    let weather = fetch_owm_report()?;
 
     let spi = peripherals.spi2;
     let sclk = pins.gpio19;
@@ -57,11 +53,11 @@ fn main() -> Result<()> {
         &mut buffer
     )?;
 
-    //display.hello_world()?;
+    display.draw_weather_report(weather)?;
 
 
     loop {
-        thread::sleep(Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(1));
     }
 
 }
